@@ -69,6 +69,8 @@ current_pos = [0]
 running = True
 shape_mode = 2  # 0=circle, 1=spiral, 2=triangle
 stream = None
+prev_fft = np.zeros(BUFFER_SIZE // 2)
+
 
 # === Color Functions ===
 def lerp_color(c1, c2, t):
@@ -86,15 +88,30 @@ def clamp_color(color):
 
 # === Audio Stream Functions ===
 def audio_callback(indata, frames, time, status):
-    global fft_values
+    global fft_values, prev_fft
+
     if status:
         print(status)
+
     audio_data = np.mean(indata, axis=1)
+    audio_data -= np.mean(audio_data)
+
+
+
     fft_result = np.abs(fft(audio_data))[:BUFFER_SIZE // 2]
+    fft_result = np.log1p(fft_result)           # Compress peaks
+    fft_result[0] = 0                           # Suppress DC/low freq
     fft_result = fft_result / np.max(fft_result + 1e-6)
-    smoothed = np.convolve(fft_result, np.ones(2)/2, mode='same')
+
+
+    fft_result = np.convolve(fft_result, np.ones(3)/3, mode='same')
+
+    alpha = 0.9 # Higher = smoother & slower
+    fft_smoothed = alpha * prev_fft + (1 - alpha) * fft_result
+    prev_fft[:] = fft_smoothed
+
     with fft_lock:
-        fft_values[:] = smoothed
+        fft_values[:] = fft_smoothed
 
 def start_microphone_stream():
     global stream
@@ -199,8 +216,19 @@ def visualize_track(filename):
                 if end > total_samples:
                     break
                 window = data[start:end] * np.hanning(BUFFER_SIZE)
+                window -= np.mean(window)
+
                 spectrum = np.abs(np.fft.fft(window))[:BUFFER_SIZE // 2]
+                fade_bins = 25  # First 10 bins will be scaled from 0 to 1
+                fade = np.ones_like(spectrum)
+                fade[:fade_bins] = np.power(np.linspace(0.0, 1.0, fade_bins), 3)
+                spectrum *= fade
+
+                spectrum = np.log1p(spectrum)              # Compress dynamic range
                 spectrum /= np.max(spectrum + 1e-6)
+                spectrum *= 0.3
+
+
                 spectrum = np.convolve(spectrum, np.ones(2) / 2, mode='same')
                 fft_values[:] = spectrum
                 current_pos[0] += BUFFER_SIZE
@@ -219,17 +247,27 @@ def run_visualizer():
 
     while running:
         screen.blit(fade_surface, (0, 0))
-        num_points = len(fft_values)
+        num_points = 512
         base_radius = 100
-        log_min, log_max = np.log10(1), np.log10(num_points)
         points = []
+        fade_bins = 25
 
         with fft_lock:
+            smoothed_fft = np.convolve(fft_values, np.ones(3)/3, mode='same')
+            active_fft = smoothed_fft[fade_bins:]
+            num_points = len(active_fft)
+
+            # Resample to match num_points around the shape
+            resampled_fft = np.interp(
+                np.linspace(0, len(smoothed_fft) - 1, num_points),
+                np.arange(len(smoothed_fft)),
+                smoothed_fft
+            )
+
             for i in range(num_points):
-                log_i = np.log10(i + 1)
-                angle_ratio = (log_i - log_min) / (log_max - log_min)
                 angle = 2 * math.pi * (i / num_points)
-                amplitude = fft_values[i]
+                amplitude = active_fft[i] ** 0.7 # DISPERSED IT MORE
+                amplitude *= 0.42
 
                 if shape_mode == 0:  # Circle
                     radius = base_radius + amplitude * 300
@@ -264,7 +302,7 @@ def run_visualizer():
                     x = CENTER[0] + dx * scale
                     y = CENTER[1] + dy * scale
 
-                color = get_blended_color(angle_ratio)
+                color = get_blended_color(i / num_points) # Change this check Marc commit 1 if like old >
                 points.append((x, y, color, amplitude))
 
         if len(points) > 1:

@@ -143,12 +143,12 @@ def main_menu():
     # Returns name of song - .wav
     display_names = [os.path.splitext(os.path.basename(path))[0] for path in AUDIO_FILES] 
     
-    options = display_names + ["Real-time Microphone Input"]
+    options = display_names + ["", "-- Use Microphone --"]
     selected = 0
 
     while running:
         screen.fill((0, 0, 30))
-        title = menu_font.render("Select an audio source:", True, (255, 255, 255))
+        title = menu_font.render("Select an Audio Track:", True, (255, 255, 255))
         screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 80))
 
         mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -162,8 +162,8 @@ def main_menu():
             label = menu_font.render(option, True, color)
             screen.blit(label, (WIDTH // 2 - label.get_width() // 2, 160 + i * 40))
 
-        # Control instructions
-        controls = " |  Space: Change Shape  |  ESC: Back/Quit  | "
+        # Import instructions
+        controls = "IMPORT: add .wav files to music folder"
         control_text = control_font.render(controls, True, (150, 150, 150))
         screen.blit(control_text, (WIDTH // 2 - control_text.get_width() // 2, HEIGHT - 40))
 

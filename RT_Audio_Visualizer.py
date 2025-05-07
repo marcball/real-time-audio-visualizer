@@ -60,6 +60,7 @@ BUFFER_SIZE = 1024
 fade_surface = pygame.Surface((WIDTH, HEIGHT))
 fade_surface.set_alpha(80)  # Faster fade
 fade_surface.fill((5, 5, 10))  # Darker fade to prevent ghosting
+flash_surface = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
 triangle = [(CENTER[0], CENTER[1] + 100), (CENTER[0] - 100, CENTER[1] - 80), (CENTER[0] + 100, CENTER[1] - 80)]
 
 # === FFT Globals ===
@@ -67,9 +68,11 @@ fft_values = np.zeros(BUFFER_SIZE // 2)
 fft_lock = threading.Lock()
 current_pos = [0]
 running = True
-shape_mode = 2  # 0=circle, 1=spiral, 2=triangle
+shape_mode = 0  # 0=circle, 1=spiral, 2=triangle
 stream = None
 prev_fft = np.zeros(BUFFER_SIZE // 2)
+beat_pulse = 0
+background_flash = True
 
 
 # === Color Functions ===
@@ -108,6 +111,9 @@ def audio_callback(indata, frames, time, status):
 
     alpha = 0.9 # Higher = smoother & slower
     fft_smoothed = alpha * prev_fft + (1 - alpha) * fft_result
+    bass_energy = np.mean(fft_smoothed[:20])  # First 20 bins = low frequencies
+    if bass_energy > 0.65 and beat_pulse < 0.2:
+        beat_pulse = 1.0
     prev_fft[:] = fft_smoothed
 
     with fft_lock:
@@ -209,6 +215,8 @@ def visualize_track(filename):
     pygame.mixer.music.play()
 
     def fft_thread():
+        global beat_pulse
+        prev_bass = [0]
         while pygame.mixer.music.get_busy() and running:
             with fft_lock:
                 start = current_pos[0]
@@ -230,6 +238,22 @@ def visualize_track(filename):
 
 
                 spectrum = np.convolve(spectrum, np.ones(2) / 2, mode='same')
+
+                print(" | ".join(f"{i}:{spectrum[i]:.2f}" for i in range(1, 15)))
+
+
+                bass_band = spectrum[10]  # focus on 60–300 Hz, actual kick & bass
+
+                bass_energy = (np.max(bass_band))
+                prev_bass[0] = bass_energy
+
+                if bass_energy >= 0.08 and beat_pulse < 0.2:
+                    beat_pulse = min(1.0, bass_energy * 30)  # flash stronger on harder hits
+                
+                # Reset beat pulse 
+                beat_pulse = max(0.0, beat_pulse - 0.05)
+
+
                 fft_values[:] = spectrum
                 current_pos[0] += BUFFER_SIZE
             time.sleep(BUFFER_SIZE / sample_rate)
@@ -243,10 +267,28 @@ def visualize_realtime():
     stop_microphone_stream()
 
 def run_visualizer():
-    global running, shape_mode
+    global running, shape_mode, beat_pulse, background_flash
 
     while running:
-        screen.blit(fade_surface, (0, 0))
+        if beat_pulse > 0:
+            beat_pulse *= 0.92  # decay
+        else:
+            beat_pulse = 0
+        bg_intensity = int(beat_pulse * 50)
+
+        # fade
+        screen.fill((0, 0, 0))
+
+        screen.blit(fade_surface, (0, 0))  # Draw the trail first
+
+        # Then draw the purple flash on top so it's visible
+        if background_flash and beat_pulse > 0:
+            intensity = int(beat_pulse * 100)
+            flash_surface.fill((intensity, 0, intensity, 60))  # strong alpha for visibility
+            screen.blit(flash_surface, (0, 0))
+            
+         # print(f"beat_pulse: {beat_pulse:.2f}") disabled for now
+
         num_points = 512
         base_radius = 100
         points = []
@@ -266,7 +308,7 @@ def run_visualizer():
 
             for i in range(num_points):
                 angle = 2 * math.pi * (i / num_points)
-                amplitude = active_fft[i] ** 0.7 # DISPERSED IT MORE
+                amplitude = active_fft[i] ** 0.7 * (1 + beat_pulse * 1.5) # DISPERSED IT MORE
                 amplitude *= 0.42
 
                 if shape_mode == 0:  # Circle
@@ -317,7 +359,7 @@ def run_visualizer():
             pygame.draw.line(screen, core, (x1, y1), (x2, y2), max(1, int(a2 * 10)))
 
         # Control instructions inside visualizer
-        controls = " |  Space: Change Shape  |  ESC: Back/Quit  | "
+        controls = " |  Space: Change Shape  |  B: Background Flash  |  ESC: Back/Quit  | "
         control_text = control_font.render(controls, True, (180, 180, 180))
         screen.blit(control_text, (WIDTH // 2 - control_text.get_width() // 2, HEIGHT - 40))
 
@@ -331,6 +373,8 @@ def run_visualizer():
                     shape_mode = (shape_mode + 1) % 3
                 elif event.key == pygame.K_ESCAPE:
                     return
+                elif event.key == pygame.K_b:
+                    background_flash = not background_flash
 
         clock.tick(60)
 

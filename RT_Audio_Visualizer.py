@@ -13,7 +13,27 @@ from pydub import AudioSegment
 
 # === Initialize Pygame ===
 pygame.init()
+
 WIDTH, HEIGHT = 800, 600
+background_filepath = 'data/img/blck.png'
+
+# Higher increases bass-stretching, lower leaves more room for high frequencies
+log_scale = 63 # Best if set to a factor of 22050 (any mult of [ 2, 3, 3, 5, 5, 7, 7 ])
+
+palette = []
+
+# Read Config
+with open( 'data/config.txt' ) as conf:
+    while text := conf.readline():
+        raw_data = text.split( ' ' )
+        if( raw_data[ 0 ] == 'width:' ): WIDTH = int( raw_data[ 1 ].strip( '\n' ) )
+        elif( raw_data[ 0 ] == 'height:' ): HEIGHT = int( raw_data[ 1 ].strip( '\n' ) )
+        elif( raw_data[ 0 ] == 'background_image_path:' ): background_filepath = raw_data[ 1 ].strip( '\n' )
+        elif( raw_data[ 0 ] == 'log_scale:' ): log_scale = int( raw_data[ 1 ].strip( '\n' ) )
+        elif( raw_data[ 0 ][ 0 ] == '(' ):
+            rgb = raw_data[ 0 ].strip( '( )\n' ).split( ',' )
+            palette.append( ( int( rgb[ 0 ] ), int( rgb[ 1 ] ), int( rgb[ 2 ] ) ) )
+
 CENTER = (WIDTH // 2, HEIGHT // 2)
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Audio Visualizer")
@@ -68,19 +88,19 @@ fft_values = np.zeros(BUFFER_SIZE // 2)
 fft_lock = threading.Lock()
 current_pos = [0]
 running = True
-shape_mode = 0  # 0=circle, 1=spiral, 2=triangle
+shape_mode = 0  # 0=circle, 1=heart, 2=triangle, 3=line, 4=donut
 stream = None
 prev_fft = np.zeros(BUFFER_SIZE // 2)
 beat_pulse = 0
 background_flash = True
-
+logarithmic = False
 
 # === Color Functions ===
 def lerp_color(c1, c2, t):
     return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
 
 def get_blended_color(angle_ratio):
-    palette = [(255, 0, 0), (255, 69, 0), (255, 255, 0), (0, 0, 255), (138, 43, 226)]
+    global palette
     n = len(palette)
     idx = int(angle_ratio * n) % n
     t = (angle_ratio * n) - idx
@@ -91,7 +111,7 @@ def clamp_color(color):
 
 # === Audio Stream Functions ===
 def audio_callback(indata, frames, time, status):
-    global fft_values, prev_fft
+    global fft_values, prev_fft, beat_pulse
 
     if status:
         print(status)
@@ -239,7 +259,7 @@ def visualize_track(filename):
 
                 spectrum = np.convolve(spectrum, np.ones(2) / 2, mode='same')
 
-                print(" | ".join(f"{i}:{spectrum[i]:.2f}" for i in range(1, 15)))
+                #print(" | ".join(f"{i}:{spectrum[i]:.2f}" for i in range(1, 15)))
 
 
                 bass_band = spectrum[10]  # focus on 60–300 Hz, actual kick & bass
@@ -267,9 +287,11 @@ def visualize_realtime():
     stop_microphone_stream()
 
 def run_visualizer():
-    global running, shape_mode, beat_pulse, background_flash
+    global running, shape_mode, beat_pulse, background_flash, logarithmic, log_scale
 
+    background = pygame.transform.scale(pygame.image.load(os.path.join(script_dir, background_filepath)).convert(), (WIDTH, HEIGHT))
     while running:
+        screen.blit( background, ( 0, 0 ) ) # Background Image load
         if beat_pulse > 0:
             beat_pulse *= 0.92  # decay
         else:
@@ -277,7 +299,6 @@ def run_visualizer():
         bg_intensity = int(beat_pulse * 50)
 
         # fade
-        screen.fill((0, 0, 0))
 
         screen.blit(fade_surface, (0, 0))  # Draw the trail first
 
@@ -307,7 +328,10 @@ def run_visualizer():
             )
 
             for i in range(num_points):
-                angle = 2 * math.pi * (i / num_points)
+                band = i / num_points
+                if( logarithmic ):
+                    band = math.log( ( log_scale - 1 ) * band + 1, log_scale )
+                angle = 2 * math.pi * band
                 amplitude = active_fft[i] ** 0.7 * (1 + beat_pulse * 1.5) # DISPERSED IT MORE
                 amplitude *= 0.42
 
@@ -317,16 +341,14 @@ def run_visualizer():
                     y = CENTER[1] + radius * math.sin(angle)
 
                 elif shape_mode == 1:  # Heart shape
-                    t = (i / num_points) * 2 * math.pi
-                    heart_x = 16 * math.sin(t) ** 3
-                    heart_y = 13 * math.cos(t) - 5 * math.cos(2 * t) - 2 * math.cos(3 * t) - math.cos(4 * t)
+                    heart_x = 16 * math.sin(angle) ** 3
+                    heart_y = 13 * math.cos(angle) - 5 * math.cos(2 * angle) - 2 * math.cos(3 * angle) - math.cos(4 * angle)
 
                     scale = 10 * (1 + amplitude * 2)  # Size and amplitude response
                     x = CENTER[0] + heart_x * scale
                     y = CENTER[1] - heart_y * scale  # Invert y for screen coordinates
 
                 elif shape_mode == 2:  # Triangle
-                    band = i / num_points
                     if band < 1/3:
                         t = band * 3
                         x = triangle[0][0] + (triangle[1][0] - triangle[0][0]) * t
@@ -343,8 +365,21 @@ def run_visualizer():
                     scale = 1 + amplitude * 2
                     x = CENTER[0] + dx * scale
                     y = CENTER[1] + dy * scale
-
-                color = get_blended_color(i / num_points) # Change this check Marc commit 1 if like old >
+                elif shape_mode == 3: # Line
+                    x = band * CENTER[ 0 ] * 2
+                    y = -CENTER[ 1 ] * amplitude + CENTER[ 1 ]
+                    # Both 'If's are meant to hide the continuity line from the beginning to the end of the spectrum
+                    if( i == 0 ):
+                        x = -10000
+                        y = HEIGHT
+                    elif( i == num_points - 1 ):
+                        x = 10000
+                        y = -10000
+                elif shape_mode == 4:  # Donut
+                    radius = base_radius + amplitude * 300
+                    x = CENTER[ 0 ] + radius * ( math.cos( 2 * angle ) * int( angle > math.pi ) + math.cos( 2 * angle ) ) / 2
+                    y = CENTER[ 1 ] + radius * ( math.sin( 2 * angle ) * int( angle > math.pi ) + math.sin( 2 * angle ) ) / 2 
+                color = get_blended_color( band ) # Change this check Marc commit 1 if like old >
                 points.append((x, y, color, amplitude))
 
         if len(points) > 1:
@@ -359,7 +394,7 @@ def run_visualizer():
             pygame.draw.line(screen, core, (x1, y1), (x2, y2), max(1, int(a2 * 10)))
 
         # Control instructions inside visualizer
-        controls = " |  Space: Change Shape  |  B: Background Flash  |  ESC: Back/Quit  | "
+        controls = " |  Space: Change Shape  |  B: Background Flash  |  L: Log/Linear Scale  |  ESC: Back/Quit  |"
         control_text = control_font.render(controls, True, (180, 180, 180))
         screen.blit(control_text, (WIDTH // 2 - control_text.get_width() // 2, HEIGHT - 40))
 
@@ -370,11 +405,13 @@ def run_visualizer():
                 running = False
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_SPACE:
-                    shape_mode = (shape_mode + 1) % 3
+                    shape_mode = (shape_mode + 1) % 5
                 elif event.key == pygame.K_ESCAPE:
                     return
                 elif event.key == pygame.K_b:
                     background_flash = not background_flash
+                elif event.key == pygame.K_l:
+                    logarithmic = not( logarithmic )
 
         clock.tick(60)
 

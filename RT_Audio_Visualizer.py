@@ -23,16 +23,23 @@ log_scale = 63 # Best if set to a factor of 22050 (any mult of [ 2, 3, 3, 5, 5, 
 palette = []
 
 # Read Config
-with open( 'data/config.txt' ) as conf:
-    while text := conf.readline():
-        raw_data = text.split( ' ' )
-        if( raw_data[ 0 ] == 'width:' ): WIDTH = int( raw_data[ 1 ].strip( '\n' ) )
-        elif( raw_data[ 0 ] == 'height:' ): HEIGHT = int( raw_data[ 1 ].strip( '\n' ) )
-        elif( raw_data[ 0 ] == 'background_image_path:' ): background_filepath = raw_data[ 1 ].strip( '\n' )
-        elif( raw_data[ 0 ] == 'log_scale:' ): log_scale = int( raw_data[ 1 ].strip( '\n' ) )
-        elif( raw_data[ 0 ][ 0 ] == '(' ):
-            rgb = raw_data[ 0 ].strip( '( )\n' ).split( ',' )
-            palette.append( ( int( rgb[ 0 ] ), int( rgb[ 1 ] ), int( rgb[ 2 ] ) ) )
+try:
+    with open( 'data/config.txt' ) as conf:
+        while text := conf.readline():
+            raw_data = text.split( ' ' )
+            if( raw_data[ 0 ] == 'width:' ): WIDTH = int( raw_data[ 1 ].strip( '\n' ) )
+            elif( raw_data[ 0 ] == 'height:' ): HEIGHT = int( raw_data[ 1 ].strip( '\n' ) )
+            elif( raw_data[ 0 ] == 'background_image_path:' ): background_filepath = raw_data[ 1 ].strip( '\n' )
+            elif( raw_data[ 0 ] == 'log_scale:' ): log_scale = int( raw_data[ 1 ].strip( '\n' ) )
+            elif( raw_data[ 0 ][ 0 ] == '(' ):
+                rgb = raw_data[ 0 ].strip( '( )\n' ).split( ',' )
+                palette.append( ( int( rgb[ 0 ] ), int( rgb[ 1 ] ), int( rgb[ 2 ] ) ) )
+except:
+        WIDTH = 800
+        HEIGHT = 600
+        background_filepath = ''
+        log_scale = 63
+        palette = [ ( 255, 0, 0 ), ( 255, 69, 0 ), ( 255, 255, 0 ), ( 0, 0, 255 ), ( 138, 43, 226 ) ]
 
 CENTER = (WIDTH // 2, HEIGHT // 2)
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -289,9 +296,11 @@ def visualize_realtime():
 def run_visualizer():
     global running, shape_mode, beat_pulse, background_flash, logarithmic, log_scale
 
-    background = pygame.transform.scale(pygame.image.load(os.path.join(script_dir, background_filepath)).convert(), (WIDTH, HEIGHT))
+    background = ''
+    if not( background_filepath == '' ): pygame.transform.scale( pygame.image.load( os.path.join( script_dir, background_filepath ) ).convert(), ( WIDTH, HEIGHT ) )
     while running:
-        screen.blit( background, ( 0, 0 ) ) # Background Image load
+        if not( background == '' ): screen.blit( background, ( 0, 0 ) ) # Background Image load
+        else: screen.fill( ( 0, 0, 0 ) ) #Ensures that config file is not necessary
         if beat_pulse > 0:
             beat_pulse *= 0.92  # decay
         else:
